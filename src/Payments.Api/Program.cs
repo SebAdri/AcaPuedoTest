@@ -39,7 +39,7 @@ app.MapPost("/api/orders",
         // }
         // "",ct);
         var paymentUrl = await apClient.CreateChargeAsync(order.ExternalId, order.Amount, order.Currency,
-            req.Description,ct);
+            req.Description, ct);
         order.PaymentUrl = paymentUrl;
         await repo.SaveChangesAsync(ct);
         var dto = new OrderDto(order.ExternalId, order.Amount, order.Currency, order.Status.ToString(),
@@ -67,8 +67,12 @@ app.MapPost("/webhooks/adamspay", async (HttpRequest request, IOrdersRepository 
     if (evt is null) return Results.BadRequest(new { message = "Invalid payload" });
     var order = await repo.GetByExternalIdAsync(evt.ExternalId, ct);
     if (order is null) return Results.NotFound();
-    order.Status = evt.Status?.ToLowerInvariant() switch { "paid"=>OrderStatus.Paid,"expired"=>OrderStatus
-        .Expired,"cancelled"=>OrderStatus.Cancelled,_ => order.Status};
+    order.Status = evt.Status?.ToLowerInvariant() switch
+    {
+        "paid" => OrderStatus.Paid, "expired" => OrderStatus
+            .Expired,
+        "cancelled" => OrderStatus.Cancelled, _ => order.Status
+    };
     db.PaymentEvents.Add(new PaymentEvent
     {
         ExternalId = evt.ExternalId, ProviderEventId = evt.Id, EventType = evt.Type ?? "unknown", Payload = payload
