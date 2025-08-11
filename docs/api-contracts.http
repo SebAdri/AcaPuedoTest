@@ -1,0 +1,10 @@
+### Create order
+POST http://localhost:5187/api/orders
+Content-Type: application/json
+
+{
+  "ExternalId": "TEST-001",
+  "Amount": 55000,
+  "Currency": "PYG",
+  "Description": "Pago de prueba"
+}

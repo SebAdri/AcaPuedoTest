@@ -1,0 +1,1 @@
+namespace Payments.Contracts.Dtos; public record OrderDto(string ExternalId, decimal Amount, string Currency, string Status, string? PaymentUrl);
