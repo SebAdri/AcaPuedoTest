@@ -1,4 +1,6 @@
+using System.Text;
 using Microsoft.AspNetCore.Http.Json;
+using Microsoft.EntityFrameworkCore;
 using Payments.Application.Abstractions.Payments;
 using Payments.Application.Abstractions.Persistence;
 using Payments.Application.Abstractions.Security;
@@ -54,20 +56,56 @@ app.MapGet("/api/orders/{externalId}", async (string externalId, IOrdersReposito
         : Results.Ok(new OrderDto(order.ExternalId, order.Amount, order.Currency, order.Status.ToString(),
             order.PaymentUrl));
 }).WithOpenApi();
+app.MapGet("/api/debts/{externalId}", async (string externalId, IAdamsPayClient apClient, CancellationToken ct) =>
+{
+    var debt = await apClient.GetOrderAsync(externalId);
+    return debt is null
+        ? Results.NotFound()
+        : Results.Ok(debt);
+}).WithOpenApi();
 app.MapPost("/webhooks/adamspay", async (HttpRequest request, IOrdersRepository repo,
-    Payments.Infrastructure.Persistence.PaymentsDbContext db, ISignatureVerifier sig, IConfiguration cfg,
+    Payments.Infrastructure.Persistence.PaymentsDbContext db, ISignatureVerifier sig, IAdamsNotifyVerifier verifier, IConfiguration cfg,
     CancellationToken ct) =>
 {
+    // // 1) Habilitar re-lectura del body y leer RAW
+    // request.EnableBuffering();
+    // using var readere = new StreamReader(request.Body, Encoding.UTF8, leaveOpen: true);
+    // var rawBody = await readere.ReadToEndAsync();
+    // request.Body.Position = 0;
+    //
+    // // 2) Obtener cabeceras de AdamsPay
+    // var appHeader = request.Headers["x-adams-notify-app"].ToString();
+    // var hashHeader = request.Headers["x-adams-notify-hash"].ToString();
+    //
+    // // 3) Cargar secreto (y opcional APP_ID) desde config/env
+    // var secrett = cfg["ADAMSPAY_WEBHOOK_SECRET"];
+    // var expectedAppId = cfg["ADAMSPAY_APP_ID"]; // opcional
+    //
+    // if (string.IsNullOrWhiteSpace(secrett))
+    //     return Results.StatusCode(StatusCodes.Status500InternalServerError); // falta config
+    //
+    // // 4) Validar hash (MD5)
+    // var ok = verifier.Verify(rawBody, hashHeader, secrett);
+    // if (!ok)
+    //     return Results.Unauthorized(); // 401
+    //
+    // // 5) (Opcional) Validar appId
+    // if (!string.IsNullOrWhiteSpace(expectedAppId) &&
+    //     !string.Equals(expectedAppId, appHeader, StringComparison.Ordinal))
+    // {
+    //     return Results.Unauthorized();
+    // }
+    
     using var reader = new StreamReader(request.Body);
     var payload = await reader.ReadToEndAsync();
     var secret = cfg["ADAMSPAY_WEBHOOK_SECRET"];
     var signature = request.Headers["X-AP-Signature"].FirstOrDefault();
     if (!string.IsNullOrWhiteSpace(secret) && !sig.Verify(payload, signature, secret)) return Results.Unauthorized();
-    var evt = System.Text.Json.JsonSerializer.Deserialize<WebhookEvent>(payload);
+    var evt = System.Text.Json.JsonSerializer.Deserialize<AdamspayWebhook>(payload);
     if (evt is null) return Results.BadRequest(new { message = "Invalid payload" });
-    var order = await repo.GetByExternalIdAsync(evt.ExternalId, ct);
+    var order = await repo.GetByExternalIdAsync(evt.Notify.Id, ct);
     if (order is null) return Results.NotFound();
-    order.Status = evt.Status?.ToLowerInvariant() switch
+    order.Status = evt.Debt.PayStatus.Status?.ToLowerInvariant() switch
     {
         "paid" => OrderStatus.Paid, "expired" => OrderStatus
             .Expired,
@@ -75,13 +113,63 @@ app.MapPost("/webhooks/adamspay", async (HttpRequest request, IOrdersRepository 
     };
     db.PaymentEvents.Add(new PaymentEvent
     {
-        ExternalId = evt.ExternalId, ProviderEventId = evt.Id, EventType = evt.Type ?? "unknown", Payload = payload
+        ExternalId = evt.Debt.DocId, ProviderEventId = evt.Notify.Id, EventType = evt.Notify.Type ?? "unknown", Payload = payload
     });
     await repo.SaveChangesAsync(ct);
     return Results.Ok(new { received = true });
 }).WithOpenApi();
+var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<Payments.Infrastructure.Persistence.PaymentsDbContext>();
+    if (db.Database.IsRelational())
+    {
+        logger.LogInformation("EF Provider: RELATIONAL (running MigrateAsync)");
+        await db.Database.MigrateAsync();
+    }
+    else
+    {
+        logger.LogInformation("EF Provider: INMEMORY (running EnsureCreatedAsync)");
+        await db.Database.EnsureCreatedAsync();
+    }
+}
+app.MapPost("/webhooks/adamspayy", async (HttpContext context, ILogger<Program> logger) =>
+{
+    // Leer body completo como string
+    context.Request.EnableBuffering();
+    using var reader = new StreamReader(context.Request.Body, leaveOpen: true);
+    var body = await reader.ReadToEndAsync();
+    context.Request.Body.Position = 0; // reset para que no se pierda
+
+    // Log body
+    logger.LogInformation("Adamspay Webhook Body: {Body}", body);
+
+    // Log headers
+    foreach (var header in context.Request.Headers)
+    {
+        logger.LogInformation("Header: {Key} = {Value}", header.Key, header.Value);
+    }
+
+    // Respuesta al webhook
+    return Results.Ok(new { status = "received" });
+});
+
+
 app.Run();
 
 record OrderCreateRequest(string ExternalId, decimal Amount, string? Currency, string? Description);
 
-record WebhookEvent(string? Type, string? Id, string ExternalId, string Status, decimal Amount);
+public record AdamspayWebhook(
+    Notify Notify, 
+    Debt Debt
+);
+
+public record Notify(
+    string Id,
+    string Type,
+    int Version,
+    DateTime Time,
+    string Merchant,
+    string App,
+    string Env
+);

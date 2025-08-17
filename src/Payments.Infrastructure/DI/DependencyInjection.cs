@@ -19,11 +19,15 @@ public static class DependencyInjection
         var conn = Environment.GetEnvironmentVariable("DATABASE_URL") ?? cfg.GetConnectionString("Default");
         if (string.IsNullOrWhiteSpace(conn))
             services.AddDbContext<PaymentsDbContext>(o => o.UseInMemoryDatabase("payments-dev"));
-        else services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(conn));
+        else services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(conn, 
+            b => b.MigrationsAssembly(typeof(PaymentsDbContext).Assembly.FullName)));
+
         services.AddScoped<IOrdersRepository, OrdersRepository>();
         services.AddHttpClient<IAdamsPayClient, AdamsPayClient>();
         services.AddSingleton<ISignatureVerifier, HmacSignatureVerifier>();
         services.AddSingleton<IDateTimeProvider, SystemDateTimeProvider>();
+        services.AddSingleton<IAdamsNotifyVerifier, AdamsNotifyVerifier>();
+        
         return services;
     }
 }
