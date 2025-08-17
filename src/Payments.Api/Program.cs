@@ -133,7 +133,7 @@ using (var scope = app.Services.CreateScope())
         await db.Database.EnsureCreatedAsync();
     }
 }
-app.MapPost("/webhooks/adamspayy", async (HttpContext context, ILogger<Program> logger) =>
+app.MapPost("/webhooks/adamspays", async (HttpContext context, ILogger<Program> logger) =>
 {
     // Leer body completo como string
     context.Request.EnableBuffering();
