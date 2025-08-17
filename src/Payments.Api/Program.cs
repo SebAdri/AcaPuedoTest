@@ -150,7 +150,7 @@ app.MapPost("/webhooks/adamspays", async (HttpContext context, ILogger<Program> 
         logger.LogInformation("Header: {Key} = {Value}", header.Key, header.Value);
     }
 
-    // Respuesta al webhook
+    // Respuesta al webhook 
     return Results.Ok(new { status = "received" });
 });
 
